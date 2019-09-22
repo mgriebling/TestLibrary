@@ -1,121 +1,175 @@
+import Foundation
+
+public typealias TimeUnitType = UnitDuration
+
+public extension TimeUnitType {
+    @nonobjc static var days = TimeUnitType(symbol: "days", converter: UnitConverterLinear(coefficient: 24*60*60))
+    @nonobjc static var weeks = TimeUnitType(symbol: "weeks", converter: UnitConverterLinear(coefficient: 7*24*60*60))
+}
+
 //********************************************************************************
 //
 // This source is Copyright (c) 2013 by Solinst Canada.  All rights reserved.
 //
 //********************************************************************************
 /**
-* \file    Rate.swift
-* \details A general-purpose rate object that has units of seconds, minutes,
-*          hours, and days.  Methods exist to convert the rate to a string
-*          and read/save the rate from/to an encoded stream.  Convenience
-*          methods provide an interface to steppers and scroll wheels.
-* \author  Michael Griebling
-* \date   22 June 2014
-*/
-//********************************************************************************
-
-import Foundation
-
-public enum TimeUnitType : Int {
-	case Sec=0, Min, Hour, Day, Week
-}
+    A general-purpose rate object that has units of seconds, minutes,
+    hours, and days.  Methods exist to convert the rate to a string
+    and read/save the rate from/to an encoded stream.  Convenience
+    methods provide an interface to steppers and scroll wheels.
+ 
+    - Author:   Michael Griebling
+    - Date:   22 June 2014
+     
+******************************************************************************** */
 
 public struct Rate {
+    
+    public typealias Time = Measurement<TimeUnitType>
+
+	private static let MAX_TIME =  99.0
+	private static let HUNDREDS = 100.0
+    
+    public static let MaxTimeLimit    = Time(value: MAX_TIME, unit: .weeks).converted(to: .seconds)
+    public static let MaxDaysLimit    = Time(value: MAX_TIME, unit: .days).converted(to: .seconds)
+    public static let MaxHoursLimit   = Time(value: MAX_TIME, unit: .hours).converted(to: .seconds)
+    public static let MaxMinutesLimit = Time(value: MAX_TIME, unit: .minutes).converted(to: .seconds)
+    public static let MaxSecondsLimit = Time(value: MAX_TIME, unit: .seconds)
+    public static let MinTimeLimit    = Time(value: 0, unit: .seconds)
+
+    public static let MINUTES  = Time(value: 1, unit: .minutes).converted(to: .seconds).value
+    public static let HOURS    = Time(value: 1, unit: .hours).converted(to: .seconds).value
+    public static let DAYS     = Time(value: 1, unit: .days).converted(to: .seconds).value
+    public static let WEEKS	   = Time(value: 1, unit: .weeks).converted(to: .seconds).value
+    
+    private static let ONE_EIGHTH      = (1.0/8.0)
+    private static let ONE_HALF        = (1.0/2.0)
+	private static let STR_PAUSE       = NSLocalizedString("Pause", comment: "Schedule pause")
+	private static let STR_ONE_EIGHTH  = NSLocalizedString("⅛", comment: "1/8 second")
+	private static let STR_ONE_HALF    = NSLocalizedString("½", comment: "1/2 second")
 	
-	public static let MAX_TIME   =  99
-	public static let HUNDREDS   = 100
-	public static let ONE_EIGHTH = (1.0/8.0)
-	public static let ONE_HALF   = (1.0/2.0)
-	public static let MINUTES	  = (60.0)
-	public static let HOURS	  = (60.0*MINUTES)
-	public static let DAYS		  = (24.0*HOURS)
-	public static let WEEKS	  = (7.0*DAYS)
-	
-	public static let scale : [NSTimeInterval] = [1.0, MINUTES, HOURS, DAYS, WEEKS]    // for units of seconds, minutes, hours, days, and weeks with seconds base
-	
-	public static let STR_PAUSE       = NSLocalizedString("Pause", comment: "Schedule pause")
-	static let STR_ONE_EIGHTH  = NSLocalizedString("⅛", comment: "1/8 second")
-	static let STR_ONE_HALF    = NSLocalizedString("½", comment: "1/2 second")
-	
+    public static var useAbbreviations = false
+    
 	// MARK: - Basic attributes
-	
-	public var allowPause: Bool				// sets a pause for time <= 0
-	public var units: TimeUnitType				// 'units' for 'time'
-	public var timeSeconds: NSTimeInterval		// time in fractional seconds
-	
-	//********************************************************************************
-	/**
-	* \details Get/set the minimum time limit to \e minimumSeconds.  The maximum value
-	*          of the minimum is limited to \e MAX_TIME weeks.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public var minimumSeconds: NSTimeInterval {
-		didSet (oldMinimum) {
-			// disallow minimums above MAX_TIME weeks
-			if minimumSeconds < Double(Rate.MAX_TIME)*Rate.WEEKS { minimumSeconds = oldMinimum }
-			if minimumSeconds > maximumSeconds { maximumSeconds = oldMinimum }
-		}
-	}
+	public var allowPause: Bool              // sets a pause for time <= 0
+    private var time : Time                  // use Apple's Measurement UnitDuration for time
+    private var minTime = Rate.MinTimeLimit  // and the minimum/maximum limits
+    private var maxTime = Rate.MaxTimeLimit
+    
+    // 'units' for 'time'
+    public var units: TimeUnitType { return time.unit }
+    
+    public var timeSeconds: TimeInterval {  // time in fractional seconds
+        get { return time.converted(to: .seconds).value }
+        set { time = Time(value: newValue, unit: .seconds).converted(to: time.unit) }
+    }
 	
 	//********************************************************************************
 	/**
-	* \details Set the maximum time limit to \e maximumSeconds.  The maximum value
-	*          is limited to \e MAX_TIME weeks.
-	* \author  Michael Griebling
-	* \date   	8 April 2013
-	*/
+	   Get/set the minimum time limit to *minimumSeconds*.  The maximum value
+	          of the minimum is limited to *MAX_TIME* weeks.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+    public var minimumSeconds: TimeInterval {
+        set {
+            let newMinimum = Time(value: newValue, unit: .seconds)
+            if newMinimum <= Rate.MaxTimeLimit && newMinimum >= Rate.MinTimeLimit {
+                minTime = newMinimum
+            }
+            if newMinimum > maxTime { maxTime = newMinimum }
+            if timeSeconds < minTime.value && !allowPause {
+                timeSeconds = minTime.value
+            }
+        }
+        get { return minTime.converted(to: .seconds).value }
+    }
+	
 	//********************************************************************************
-	public var maximumSeconds: NSTimeInterval {
-		didSet (oldMaximum) {
-			// disallow maximums above MAX_TIME weeks
-			if maximumSeconds <= Double(Rate.MAX_TIME)*Rate.WEEKS { maximumSeconds = oldMaximum }
-		}
+	/**
+	   Set the maximum time limit to *maximumSeconds*.  The maximum value
+	          is limited to *MAX_TIME* weeks.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	8 April 2013
+     
+     ******************************************************************************** */
+	public var maximumSeconds: TimeInterval {
+        set {
+            let newMaximum = Time(value: newValue, unit: .seconds)
+            if newMaximum <= Rate.MaxTimeLimit && newMaximum >= Rate.MinTimeLimit {
+                maxTime = newMaximum
+            }
+            if timeSeconds > maxTime.value {
+                timeSeconds = maxTime.value
+            }
+        }
+        get { return maxTime.converted(to: .seconds).value }
 	}
 	
 	// MARK: - Default constructors
 	
 	//********************************************************************************
 	/**
-	* \details Initialize a LLRate object with a given \e time and \e units.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
+	   Initialize a Rate object with a given *time* and *units*.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
 	public init (time: Int, andUnits units: TimeUnitType) {
-		// convert time to seconds
-		self.init(interval: Double(time) * Rate.scale[units.rawValue])
-		self.units = units
+        let limit = Int(Rate.MAX_TIME)
+        assert(time <= limit, "Time must be ≤ \(limit)")
+        self.init(time: Time(value: Double(time), unit: units))
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Initialize a LLRate object with a given \e rawTime in hundredths of
-	*          seconds.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public init (var rawTime: Int64) {
-		if rawTime < 0 { rawTime = 0 }
-		self.init(interval: Rate.getSecondsFromRawTime(rawTime))
-		self.units = getUnitsForRawTime(rawTime)
+	   Initialize a Rate object with a given *rawTime* in hundredths of seconds.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+    public init (rawTime: TimeInterval) {
+        let rawTime = max(0, rawTime)
+        let units = Rate.getUnitsForRawTime(rawTime)
+        let time = Time(value: Rate.getSecondsFrom(rawTime: rawTime), unit: .seconds).converted(to: units)
+        self.init(time: time)
 	}
+    
+    //********************************************************************************
+    /**
+         Initialize the rate from seconds.
+         
+            - Author:   Michael Griebling
+            - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+    public init (seconds : TimeInterval) {
+        if seconds > 99 {
+            let rawtime = floor(seconds * Rate.HUNDREDS)
+            self.init(rawTime: rawtime)
+        } else {
+            self.init(time: Time(value: seconds, unit: .seconds))
+        }
+    }
 
 	//********************************************************************************
 	/**
-	* \details Designated initializer for the LLRate object.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public init (interval: NSTimeInterval) {
-		timeSeconds = interval
-		minimumSeconds = Rate.ONE_EIGHTH
-		maximumSeconds = Double(Rate.MAX_TIME) * Rate.WEEKS
-		units = .Sec
-		allowPause = false
+	   Designated initializer for the Rate object.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+    public init (time: Time) {
+		self.time = time
+		self.allowPause = time.value < Rate.ONE_EIGHTH
+        minTime = Time(value: Rate.ONE_EIGHTH, unit: .seconds)
+        maxTime = Rate.MaxTimeLimit
 	}
 	
 	
@@ -123,320 +177,287 @@ public struct Rate {
 	
 	//********************************************************************************
 	/**
-	* \details Returns a preferred time unit for the raw time \e num.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
-	public func getUnitsForRawTime(var num: Int64) -> TimeUnitType {
-		var unit: TimeUnitType = .Sec            // default is seconds
-		num /= Int64(Rate.HUNDREDS)
+	   Returns a preferred time unit for the raw time *num*.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	private static func getUnitsForRawTime(_ num: TimeInterval) -> TimeUnitType {
+        let MAX        = Int(MAX_TIME)
+        let SECSPERMIN = Int(MINUTES)
+        let MINSPERHR  = Int(HOURS / MINUTES)
+        let HRSPERDAY  = Int(DAYS / HOURS)
+        let DAYSPERWK  = Int(WEEKS / DAYS)
+		var unit: TimeUnitType = .seconds   // default is seconds
+        var num = Int(num / HUNDREDS)
 		if num == 0 { return unit }
-		if ((num % 60) == 0 || num > Int64(Rate.MAX_TIME)) {
-			unit = .Min                  // assume units are minutes
-			num /= 60;
-			if ((num % 60) == 0 || num > Int64(Rate.MAX_TIME)) {
-				unit = .Hour             // assume units are in hours
-				num /= 60;
-				if ((num % 24) == 0 || num > Int64(Rate.MAX_TIME)) {
-					unit = .Day
-					num /= 24;
-					if ((num % 7) == 0 || num > Int64(Rate.MAX_TIME)) {
-						unit = .Week
-						num /= 7;
+		if num % SECSPERMIN == 0 || num > MAX {
+			unit = .minutes                 // assume units are minutes
+			num /= SECSPERMIN
+			if num % MINSPERHR == 0 || num > MAX {
+				unit = .hours               // assume units are in hours
+				num /= MINSPERHR
+				if num % HRSPERDAY == 0 || num > MAX {
+					unit = .days
+					num /= HRSPERDAY
+					if num % DAYSPERWK == 0 || num > MAX {
+						unit = .weeks
+						num /= DAYSPERWK
 					}
 				}
 			}
 		}
-		return unit;
+		return unit
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Converts a \e rawTime in hundredths of seconds to an \e NSTimeInterval
-	*          in seconds.  Note: 1/8 second is correctly handled.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public static func getSecondsFromRawTime(rawTime: Int64) -> NSTimeInterval {
-		var time = NSTimeInterval(rawTime)
-		if (rawTime > 0) {
-			if (rawTime < Int64(Rate.HUNDREDS)/2) { time = Rate.ONE_EIGHTH }   // 1/8 sampling rate
-			else { time = Double(rawTime) / Double(Rate.HUNDREDS) }
+	   Converts a *rawTime* in hundredths of seconds to an *NSTimeInterval*
+	          in seconds.  Note: 1/8 second is correctly handled.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	public static func getSecondsFrom(rawTime: TimeInterval) -> TimeInterval {
+		let time = max(0, rawTime)
+		if rawTime > 0 {
+			if rawTime < HUNDREDS/2 { return ONE_EIGHTH }   // 1/8 sampling rate
 		}
-		return time;
+		return time / HUNDREDS
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Gets a raw time in hundredths of seconds from the \e seconds time.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public func getRawTimeFromSeconds(seconds: NSTimeInterval) -> Int64 {
-		return Int64(floor(seconds * Double(Rate.HUNDREDS)))
+	   Gets a raw time in hundredths of seconds from the *seconds* time.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	private func getRawTimeFromSeconds(_ seconds: TimeInterval) -> TimeInterval {
+		return floor(seconds * Rate.HUNDREDS)
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Set the rate from the \e rawTime.  The internal units are determined
-	*          based on the magnitude of the raw time.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public mutating func setRawTime(rawTime: Int64) {
-		units = getUnitsForRawTime(rawTime)
-		timeSeconds = Rate.getSecondsFromRawTime(rawTime)
+	   Set the rate from the *rawTime*.  The internal units are determined
+	          based on the magnitude of the raw time.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	private mutating func setRawTime(_ rawTime: TimeInterval) {
+        let units = Rate.getUnitsForRawTime(rawTime)
+        time = Time(value: Rate.getSecondsFrom(rawTime: rawTime), unit: .seconds).converted(to: units)
 	}
 	
-	public static let dateComponentsFormatter: NSDateComponentsFormatter = {
-		let formatter = NSDateComponentsFormatter()
-		formatter.unitsStyle = .Full
+    //********************************************************************************
+    /**
+         Returns a date formatter for use by this class and derived objects.
+         
+            - Author:   Michael Griebling
+            - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	 @nonobjc public static let dateComponentsFormatter: DateComponentsFormatter = {
+		let formatter = DateComponentsFormatter()
+		formatter.unitsStyle = .full
 		return formatter
 	}()
 	
 	//********************************************************************************
 	/**
-	* \details Returns a units string for any \e TimeUnitType in \e units with a
-	*          plural extension based on the \e time.  An abbreviated string is
-	*		   returned when \e abbreviated is \e true.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public func stringFromUnits(units: TimeUnitType, andTime time: Int, abbreviated: Bool = false) -> String {
+        Returns a units string for any *TimeUnitType* in *units* with a
+	    plural extension based on the *time*.  An abbreviated string is
+		returned when *abbreviated* is *true*.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	public func stringFromUnits(_ units: TimeUnitType, andTime time: Int, abbreviated: Bool = Rate.useAbbreviations) -> String {
 		let formatter = Rate.dateComponentsFormatter
-		let components = NSDateComponents()
-		if abbreviated { formatter.unitsStyle = .Abbreviated }
-		switch units {
-		case .Sec: components.second = time
-		case .Min: components.minute = time
-		case .Hour: components.hour = time
-		case .Day: components.day = time
-		case .Week: components.weekOfMonth = time
-		}
-		if let string = formatter.stringFromDateComponents(components) {
+		var components = DateComponents()
+		if abbreviated { formatter.unitsStyle = .abbreviated }
+        if units == .seconds { components.second = time }
+        if units == .minutes { components.minute = time }
+        if units == .hours   { components.hour = time }
+        if units == .days    { components.day = time }
+        if units == .weeks   { components.weekOfMonth = time }
+		if let string = formatter.string(from: components) {
 			// remove numbers and spaces from the string
-			return string.stringByTrimmingCharactersInSet(NSCharacterSet.decimalDigitCharacterSet())
-				.stringByTrimmingCharactersInSet(NSCharacterSet.whitespaceCharacterSet())
+			return string.trimmingCharacters(in: CharacterSet.decimalDigits)
+				.trimmingCharacters(in: CharacterSet.whitespaces)
 		}
 		return ""
 	}
 	
 	//********************************************************************************
 	/**
-	 * \details Returns a short version of the units string for any \e TimeUnitType
-	 *          in \e units.
-	 * \author  Michael Griebling
-	 * \date   	28 March 2013
-	 */
-	//********************************************************************************
-	public func shortStringFromUnits(units: TimeUnitType) -> String {
+	    Returns a short version of the units string for any *TimeUnitType*
+	           in *units*.
+     
+	   - Author:   Michael Griebling
+	     - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	public func shortStringFromUnits(_ units: TimeUnitType) -> String {
 		return stringFromUnits(units, andTime: 1, abbreviated: true)
 	}
-	
-	// MARK: - Class-based constructors
 
-	//********************************************************************************
-	/**
-	* \details Factory method to create a rate with a specific \e time and \e units.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public static func rateWithTime(time: Int, andUnits units: TimeUnitType) -> Rate {
-		return Rate(time: time, andUnits: units)
-	}
-
-	//********************************************************************************
-	/**
-	* \details Factory method to create a rate with a \e rawTime in hundredths of
-	*          seconds.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public static func rateWithRawTime(rawTime: Int64) -> Rate {
-		return Rate(rawTime: rawTime)
-	}
-	
-	//********************************************************************************
-	/**
-	* \details Factory method to create a rate with a specific \e interval in
-	*          seconds
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public static func rateWithTimeInterval(interval: NSTimeInterval) -> Rate {
-		return Rate(interval: interval)
-	}
 	
 	// MARK: - Getters/Setters
 	
 	//********************************************************************************
 	/**
-	* \details Setter to set the rate's time from \e timeSeconds.  The internal
-	*          time is clamped to the rate's minimum time.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public mutating func setTimeSeconds (var time: NSTimeInterval) {
+        Setter to set the rate's time from *time* seconds.  The internal
+	    time is clamped to the rate's minimum time.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	private mutating func makeTimeSeconds (_ time: TimeInterval) {
 		// clamp to minimum time
-		if time < self.minimumSeconds { time = self.minimumSeconds }
-		else if time > self.maximumSeconds { time = self.maximumSeconds }
-		if time > Double(Rate.MAX_TIME) {
+        let time = min(maximumSeconds, max(minimumSeconds, time))
+		if time > Rate.MAX_TIME {
 			// re-evaluate the units we're using
-			setRawTime(Int64(time*Double(Rate.HUNDREDS)))
+			setRawTime(time * Rate.HUNDREDS)
 		} else {
-			timeSeconds = time
+            self.time = Time(value: time, unit: .seconds)
 		}
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Get/set the rate's internal time scaled by the active units.  For example,
-	*          if the internal time = 180 seconds and the time units are minutes,
-	*          the returned value would be three.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public var time: Int {
+	   Get/set the rate's internal time scaled by the active units.  For example,
+	          if the internal time = 180 seconds and the time units are minutes,
+	          the returned value would be three.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	public var timeUnits : Int {
 		get {
 			// get the current time assuming display units are in use
-			let result = timeSeconds / Rate.scale[units.rawValue]
-			return Int(round(result))
+			return Int(round(time.value))
 		}
 		set (newTime) {
-			timeSeconds = Double(newTime) * Rate.scale[units.rawValue]
+			time = Time(value: Double(newTime), unit: time.unit)  //Double(newTime) * Rate.scale[units.rawValue]
 		}
 	}
 
 	//********************************************************************************
 	/**
-	* \details Set the rate based on the \e time and \e units where
-	*          \f$1\leq {time} \leq 99\f$.
-	* \author  Michael Griebling
-	* \date   	28 March 2013
-	*/
-	//********************************************************************************
-	public mutating func setTime (time: Int, andUnits units: TimeUnitType) {
-		self.units = units
-		self.time = min(max(1, time), Rate.MAX_TIME)    // clamp between 1 and 99
+	   Set the rate based on the *time* and *units* where 1 ≤ *time* ≤ 99.
+
+            - Author:   Michael Griebling
+            - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	private mutating func setTime (_ time: Int, andUnits units: TimeUnitType) {
+        self.time = Time(value: Double(min(max(1, time), Int(Rate.MAX_TIME))), unit: units) // clamp between 1 and 99
 	}
 	
 	//********************************************************************************
 	/**
-	 * \details Returns an array of time unit strings with a possibly blank initial
-	 *          position for the pause.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
+	    Returns an array of time unit strings with a possibly blank initial
+        position for the pause.
+     
+             - Author:   Michael Griebling
+             - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public var timeUnitsArray : [String] {
 		var labels = [String]()
 		if allowPause { labels = [""] }     // no units for pause
-		labels.append(stringFromUnits(.Sec, andTime:time))
-		if maximumSeconds > Rate.MINUTES { labels.append(stringFromUnits(.Min, andTime:time)) }
-		if maximumSeconds > Rate.HOURS   { labels.append(stringFromUnits(.Hour, andTime:time)) }
-		if maximumSeconds > Rate.DAYS	 { labels.append(stringFromUnits(.Day, andTime:time)) }
-		if maximumSeconds > Rate.WEEKS	 { labels.append(stringFromUnits(.Week, andTime:time)) }
-		return labels;
+		labels.append(stringFromUnits(.seconds, andTime:timeUnits))
+		if maximumSeconds > Rate.MINUTES { labels.append(stringFromUnits(.minutes, andTime:timeUnits)) }
+		if maximumSeconds > Rate.HOURS   { labels.append(stringFromUnits(.hours, andTime:timeUnits)) }
+		if maximumSeconds > Rate.DAYS	 { labels.append(stringFromUnits(.days, andTime:timeUnits)) }
+		if maximumSeconds > Rate.WEEKS	 { labels.append(stringFromUnits(.weeks, andTime:timeUnits)) }
+		return labels
 	}
 	
-	public var rawTime: Int64 { return getRawTimeFromSeconds(timeSeconds) }	// raw time in 1/100 of a second
-	
-	//********************************************************************************
-	/**
-	 * \details Returns \e YES iff \e rate is equal this object's rate.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
-	public func isEqualToRate (rate: Rate) -> Bool {
-		return rawTime == rate.rawTime
-	}
+	public var rawTime: TimeInterval { return getRawTimeFromSeconds(timeSeconds) }	// raw time in 1/100 of a second
 	
 	// MARK: - Support for scrollwheels
 	
 	//********************************************************************************
 	/**
-	* \details Returns the maximum time index for a scroll wheel based on the active
-	*          rate.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
+	   Returns the maximum time index for a scroll wheel based on the active rate.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public var maxIndexForTime : Int {
-		var maxIndex = Rate.MAX_TIME;                           // default for non-seconds
-		if units == .Sec {
-			if allowPause { maxIndex++ }						// make room for pause
-			if (self.minimumSeconds < 1.0) {
-				if minimumSeconds < Rate.ONE_HALF { maxIndex++ } // make room for 1/8 second
-				if minimumSeconds < 1.0			  { maxIndex++ } // make room for 1/2 second
+		var maxIndex = Int(Rate.MAX_TIME)                       // default for non-seconds
+		if units == .seconds {
+			if allowPause { maxIndex += 1 }						// make room for pause
+			if minimumSeconds < 1.0 {
+				if minimumSeconds < Rate.ONE_HALF { maxIndex += 1 } // make room for 1/8 second
+				maxIndex += 1                                       // make room for 1/2 second
 			} else {
 				// minimum time must be less than MAX_TIME
-				maxIndex -= Int(minimumSeconds)
+				maxIndex -= max(0, Int(minimumSeconds)-1)
 			}
 		} else {
-			if maximumSeconds <= Double(Rate.MAX_TIME)*Rate.MINUTES { maxIndex = Int(self.maximumSeconds / Rate.MINUTES) }
-			else if maximumSeconds <= Double(Rate.MAX_TIME)*Rate.HOURS { maxIndex = Int(self.maximumSeconds / Rate.HOURS) }
-			else if maximumSeconds <= Double(Rate.MAX_TIME)*Rate.DAYS { maxIndex = Int(self.maximumSeconds / Rate.DAYS) }
-			else if maximumSeconds <= Double(Rate.MAX_TIME)*Rate.WEEKS { maxIndex = Int(self.maximumSeconds / Rate.WEEKS) }
+            if      time.unit == .minutes { maxIndex = min(maxIndex, Int((maxTime / Rate.MINUTES).value)) }
+			else if time.unit == .hours   { maxIndex = min(maxIndex, Int((maxTime / Rate.HOURS).value)) }
+            else if time.unit == .days    { maxIndex = min(maxIndex, Int((maxTime / Rate.DAYS).value)) }
+			else if time.unit == .weeks   { maxIndex = min(maxIndex, Int((maxTime / Rate.WEEKS).value)) }
 		}
-		return maxIndex;
+		return maxIndex
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Returns a maximum unit index for a scroll wheel based on the active
-	*          rate.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
+	   Returns a maximum unit index for a scroll wheel based on the active rate.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public var maxIndexForUnits : Int {
-		var maxIndex = TimeUnitType.Week.rawValue+1
-		if maximumSeconds < Double(Rate.MAX_TIME)*Rate.WEEKS   { maxIndex-- }
-		if maximumSeconds < Double(Rate.MAX_TIME)*Rate.DAYS    { maxIndex-- }
-		if maximumSeconds < Double(Rate.MAX_TIME)*Rate.HOURS   { maxIndex-- }
-		if maximumSeconds < Double(Rate.MAX_TIME)*Rate.MINUTES { maxIndex-- }
-		if allowPause { maxIndex++ }                // make room for blank pause units
-		return maxIndex;
+		var maxIndex = Rate.timeUnits.count // TimeUnitType.week.rawValue+1
+		if maxTime < Rate.MaxTimeLimit    { maxIndex -= 1 }
+		if maxTime < Rate.MaxDaysLimit    { maxIndex -= 1 }
+		if maxTime < Rate.MaxHoursLimit   { maxIndex -= 1 }
+		if maxTime < Rate.MaxMinutesLimit { maxIndex -= 1 }
+		if allowPause                     { maxIndex += 1 } // make room for blank pause units
+		return maxIndex
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Returns the time index for a scroll wheel that corresponds to the
-	*          active rate.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
+	   Returns the time index for a scroll wheel that corresponds to the active rate.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public var timeIndex : Int {
-		var index = max(0, time-1);							// default for non-seconds
-		if units == .Sec {
+		var index = max(0, timeUnits-1)                      // default for non-seconds
+		if units == .seconds {
 			let time = timeSeconds
 			if allowPause {
-				if (time == 0) { return 0 }					// pause
-				index++;
+				if (time == 0) { return 0 }                  // pause
+				index += 1
 			}
 			if minimumSeconds < 1.0 {
 				if minimumSeconds < Rate.ONE_HALF {
 					if time < Rate.ONE_HALF { return index } // 1/8 second
-					index++
+					index += 1
 				}
-				if minimumSeconds < 1.0 {
-					if (time < 1.0) { return index }		// 1/2 second
-					index++
-				}
+				if time < 1.0 { return index }               // 1/2 second
+				index += 1
 			} else {
-				index -= Int(floor(self.minimumSeconds)-1)
+				index -= Int(floor(minimumSeconds)-1)
 			}
 		}
 		return max(0, index)
@@ -444,47 +465,50 @@ public struct Rate {
 	
 	//********************************************************************************
 	/**
-	* \details Returns a unit index for a scroll wheel that corresponds to the
-	*          active rate.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
+	   Returns a unit index for a scroll wheel that corresponds to the active rate.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public var unitIndex : Int {
-		var index = units.rawValue
-		if allowPause && timeSeconds > 0 { index++ }    // make room for blank pause units
+        var index = Rate.timeUnits.firstIndex { $0 == units } ?? 0   // find units index in timeUnits
+		if allowPause && timeSeconds > 0 { index += 1 }         // make room for blank pause units
 		return index
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Returns a time value string for a given scroll wheel index.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
-	public func stringForTimeIndex(var index: Int) -> String {
+	   Returns a time value string for a given scroll wheel index.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public func stringForTimeIndex(_ index: Int) -> String {
 		var offset = 1
-		if units == .Sec {
+        var index = index
+		if units == .seconds {
 			let times = getTimeFractions()
-			if (index < times.count) {
-				return times[index];
+			if index < times.count {
+				return times[index]
 			} else {
 				index -= times.count-1
 			}
-			offset = max(0, Int(floor(self.minimumSeconds)-1))
+			offset = max(0, Int(floor(minimumSeconds)-1))
 		}
 		return String.localizedStringWithFormat("%ld", index+offset)
 	}
 	
 	//********************************************************************************
 	/**
-	* \details Returns a unit string for a given scroll wheel index.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
-	public func stringForUnitIndex(index: Int) -> String {
+	   Returns a unit string for a given scroll wheel index.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public func stringForUnitIndex(_ index: Int) -> String {
 		let units = timeUnitsArray
 		if index < units.count { return units[index] }
 		return "???"   // unsupported unit
@@ -493,50 +517,56 @@ public struct Rate {
 
 	//********************************************************************************
 	/**
-	* \details Sets the active rate value from a scroll wheel's value index.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
-	public mutating func setTimeFromTimeIndex(var index: Int) {
+	   Sets the active rate value from a scroll wheel's value index.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public mutating func setTimeFromTimeIndex(_ index: Int) {
+        var index = index
 		if index < maxIndexForTime {
-			if units == .Sec {
+			if units == .seconds {
 				if allowPause {
-					if index == 0 { timeSeconds = 0 }  // need to override minimum seconds
-					index--
+					if index == 0 { time = Time(value: 0, unit: .seconds) }  // need to override minimum seconds
+					index -= 1
 				}
 				if minimumSeconds < Rate.ONE_HALF {
-					if (index == 0) { timeSeconds = Rate.ONE_EIGHTH }
-					index--
+					if index == 0 { time = Time(value: Rate.ONE_EIGHTH, unit: .seconds) }
+					index -= 1
 				}
 				if minimumSeconds < 1.0 {
-					if index == 0 { timeSeconds = Rate.ONE_HALF }
-					index--
+					if index == 0 { time = Time(value: Rate.ONE_HALF, unit: .seconds) }
+					index -= 1
 				}
-				if index >= 0 { timeSeconds = Double(max(0, Int(minimumSeconds-1))+index+1) }
+				if index >= 0 { time = Time(value: Double(max(0, Int(minimumSeconds-1))+index+1), unit: .seconds) }
 			} else {
-				self.time = index+1
+                time = Time(value: Double(index+1), unit: units)
 			}
 		}
 	}
+    
+    private static var timeUnits : [TimeUnitType] = [.seconds, .minutes, .hours, .days, .weeks]
 	
 	//********************************************************************************
 	/**
-	* \details Sets the active unit from a scroll wheel's unit index.
-	* \author  Michael Griebling
-	* \date   	2 April 2013
-	*/
-	//********************************************************************************
-	public mutating func setUnitFromUnitIndex (index: Int) {
+	   Sets the active unit from a scroll wheel's unit index.
+     
+	    - Author:   Michael Griebling
+	    - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public mutating func setUnitFromUnitIndex (_ index: Int) {
 		if index < maxIndexForUnits {
-			var time = max(1, self.time)     // preserve time across unit changes
+			var time = max(1, self.time.value)     // preserve time across unit changes
+            var unit = self.time.unit
 			if allowPause {
 				if timeSeconds == 0 { time = 0 }
-				else { self.units = TimeUnitType(rawValue: max(0, index-1))! }
+				else { unit = Rate.timeUnits[max(0, index-1)] }
 			} else {
-				self.units = TimeUnitType(rawValue: index)!
+				unit = Rate.timeUnits[index]
 			}
-			self.time = time
+            self.time = Time(value: time, unit: unit)
 		}
 	}
 
@@ -545,49 +575,50 @@ public struct Rate {
 	
 	//********************************************************************************
 	/**
-	 * \details Returns the maximum step limit for a stepper based on the current
-	 *          rate.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
-	public var maxStepIndex : Int { return maxIndexForTime }
+	    Returns the maximum step limit for a stepper based on the current rate.
+     
+	     - Author:   Michael Griebling
+	     - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public var maxStepIndex : Int { return maxIndexForTime-1 }
 	
 	//********************************************************************************
 	/**
-	 * \details Returns a time and unit string based on the stepper \e index.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
-	public func stringForStepIndex(index: Int) -> String {
-		return string
+	    Returns a time and unit string based on the stepper *index*.
+     
+	     - Author:   Michael Griebling
+	     - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public func stringForStepIndex(_ index: Int) -> String {
+        return Rate.useAbbreviations ? shortString : string
 	}
 
 	//********************************************************************************
 	/**
-	 * \details Sets the current rate based on the stepper's value \e index.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
-	public mutating func setTimeFromIndex(index : Int) {
-		setTimeFromTimeIndex(index)
-	}
+	    Sets the current rate based on the stepper's value *index*.
+     
+	     - Author:   Michael Griebling
+	     - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public mutating func setTimeFromIndex(_ index : Int) { setTimeFromTimeIndex(index) }
 	
 	// MARK: - String support
 	
 	//********************************************************************************
 	/**
-	 * \details Returns an array of legal time strings that are less than one second.
-	 * \author  Michael Griebling
-	 * \date   	28 March 2013
-	 */
-	//********************************************************************************
-	public func getTimeFractions() -> [String] {
+	    Returns an array of legal time strings that are less than one second.
+     
+	     - Author:   Michael Griebling
+	     - Date:   	28 March 2013
+     
+     ******************************************************************************** */
+	private func getTimeFractions() -> [String] {
 		var fractions = [String]()
 		if allowPause { fractions = [Rate.STR_PAUSE] }
-		if units == .Sec {
+		if units == .seconds {
 			if minimumSeconds < Rate.ONE_HALF { fractions.append(Rate.STR_ONE_EIGHTH) }
 			if minimumSeconds < 1.0			  { fractions.append(Rate.STR_ONE_HALF) }
 		}
@@ -596,28 +627,53 @@ public struct Rate {
 	
 	//********************************************************************************
 	/**
-	 * \details Returns the active rate string without units.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
+	    Returns the active rate string without units.
+     
+	     - Author:   Michael Griebling
+	     - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public func stringFromRate() -> String {
 		let num = rawTime
 		if num == 0 && self.allowPause { return Rate.STR_PAUSE }
 		else if num < 50               { return Rate.STR_ONE_EIGHTH }
 		else if num < 100              { return Rate.STR_ONE_HALF }
-		return String.localizedStringWithFormat("%ld", time)
+		return String.localizedStringWithFormat("%ld", Int(time.value))
 	}
 	
-	var stringFromUnits : String {
-		return ""
+    //********************************************************************************
+    /**
+        Returns the active units string.
+         
+         - Author:   Michael Griebling
+         - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public var stringFromUnits : String {
+		return stringFromUnits(units, andTime: timeUnits)
 	}
 	
+    //********************************************************************************
+    /**
+        Returns the active rate string with units.
+         
+         - Author:   Michael Griebling
+         - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public var string : String {
 		if rawTime == 0 && allowPause { return stringFromRate() }
 		return stringFromRate() + " " + stringFromUnits
 	}
 	
+    //********************************************************************************
+    /**
+	    Returns the active abbreviated rate string with units.
+     
+         - Author:   Michael Griebling
+         - Date:   	2 April 2013
+     
+     ******************************************************************************** */
 	public var shortString : String {
 		if rawTime == 0 && allowPause { return stringFromRate() }
 		return stringFromRate() + shortStringFromUnits(units)
@@ -625,41 +681,60 @@ public struct Rate {
 	
 	// MARK: - NSCoding
 	
-	static let kRateTime   = "RateTime"
-	static let kRateUnits  = "RateUnits"
-	static let kRatePause  = "RatePause"
-	static let kMinTime    = "MinimumTime"
-	static let kMaxTime    = "MaximumTime"
+	private static let kRateTime   = "RateTime"
+	private static let kRateUnits  = "RateUnits"
+	private static let kRatePause  = "RatePause"
+	private static let kMinTime    = "MinimumTime"
+	private static let kMaxTime    = "MaximumTime"
 	
 	//********************************************************************************
 	/**
-	 * \details Encoder for the rate to be \e NSCoding compliant.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
-	func encodeWithCoder(encoder: NSCoder) {
-		encoder.encodeDouble(self.timeSeconds, forKey:Rate.kRateTime)
-		encoder.encodeInteger(self.units.rawValue, forKey:Rate.kRateUnits)
-		encoder.encodeBool(self.allowPause, forKey:Rate.kRatePause)
-		encoder.encodeDouble(self.minimumSeconds, forKey:Rate.kMinTime)
-		encoder.encodeDouble(self.maximumSeconds, forKey:Rate.kMaxTime)
+	    Encoder for the rate to be *NSCoding* compliant.
+     
+	     - Author:   Michael Griebling
+	     - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public func encodeWithCoder(_ encoder: NSCoder) {
+		encoder.encode(self.time.value, forKey:Rate.kRateTime)
+        let unitIndex = Rate.timeUnits.firstIndex { $0 == units } ?? 0
+		encoder.encode(unitIndex, forKey:Rate.kRateUnits)
+		encoder.encode(self.allowPause, forKey:Rate.kRatePause)
+		encoder.encode(self.minimumSeconds, forKey:Rate.kMinTime)
+		encoder.encode(self.maximumSeconds, forKey:Rate.kMaxTime)
 	}
 	
 	//********************************************************************************
 	/**
-	 * \details Decoder for the rate to be \e NSCoding compliant.
-	 * \author  Michael Griebling
-	 * \date   	2 April 2013
-	 */
-	//********************************************************************************
-	init (coder: NSCoder) {
-		timeSeconds = coder.decodeDoubleForKey(Rate.kRateTime)
-		units = TimeUnitType(rawValue: coder.decodeIntegerForKey(Rate.kRateUnits))!
-		allowPause = coder.decodeBoolForKey(Rate.kRatePause)
-		minimumSeconds = coder.decodeDoubleForKey(Rate.kMinTime)
-		maximumSeconds = coder.decodeDoubleForKey(Rate.kMaxTime)
+	    Decoder for the rate to be *NSCoding* compliant.
+     
+	     - Author:   Michael Griebling
+	     - Date:   	2 April 2013
+     
+     ******************************************************************************** */
+	public init (coder: NSCoder) {
+		let time = coder.decodeDouble(forKey: Rate.kRateTime)
+		let units = Rate.timeUnits[coder.decodeInteger(forKey: Rate.kRateUnits)]
+        self.time = Time(value: time, unit: units)
+		allowPause = coder.decodeBool(forKey: Rate.kRatePause)
+        minTime = Time(value: coder.decodeDouble(forKey: Rate.kMinTime), unit: .seconds)
+        maxTime = Time(value: coder.decodeDouble(forKey: Rate.kMaxTime), unit: .seconds)
 	}
-
 
 }
+
+extension Rate : Comparable {
+    
+    public static func == (lhs: Rate, rhs: Rate) -> Bool { return lhs.rawTime == rhs.rawTime }
+    public static func < (lhs: Rate, rhs: Rate)  -> Bool { return lhs.rawTime < rhs.rawTime }
+ 
+}
+
+
+extension Rate :  CustomStringConvertible, CustomDebugStringConvertible {
+    
+    public var description: String { return string }
+    public var debugDescription: String { return description }
+    
+}
+
